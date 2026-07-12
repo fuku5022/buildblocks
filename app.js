@@ -7,7 +7,7 @@
      ============================================================ */
   const EMOTIONS = {
     joy:      { color:"#C97D4A", colorDark:"#7A4325", label:"よろこび", glow:false,
-                words:["嬉し","うれし","楽し","たのし","最高","好き","すき","やった","ありがと","わくわく","幸せ","しあわせ","よかっ","良かっ","面白","おもしろ","ハッピー","嬉","楽"] },
+                words:["嬉し","うれし","楽し","たのし","最高","好き","すき","やった","ありがと","わくわく","幸せ","しあわせ","よかっ","良かっ","面白","おもしろ","おもろ","ハッピー","嬉","楽"] },
     anger:    { color:"#8B3A2E", colorDark:"#501F17", label:"いかり", glow:false,
                 words:["怒","むかつ","ムカつ","腹立","許せな","うざ","最悪","イライラ","いらいら","くそ","嫌","きら","うるさ","ふざけるな","だる"] },
     sorrow:   { color:"#4A5D6B", colorDark:"#263039", label:"かなしみ", glow:false,
@@ -17,7 +17,7 @@
     thought:  { color:"#6E7B57", colorDark:"#3C4530", label:"かんがえ", glow:false,
                 words:["なんで","どうして","気づき","気付き","本質","つまり","要するに","考え","かんがえ","思う","たぶん","おそらく","仮説","疑問","なぜ","はず","というか","逆に言うと","言い換えると","結局","そもそも","前提として","仮に","例えば","たとえば","一方で","むしろ","気がす"] },
     insight:  { color:"#C9A84C", colorDark:"#6E5A1F", label:"ひらめき", glow:true,
-                words:["わかった","分かった","そうか","そういうことか","なるほど","閃い","ひらめい","発見","気づい","気付い","腑に落ち","繋がった","つながった","これだ","わかったぞ","見えた","そういうことだったのか"] },
+                words:["わかった","分かった","そうか","そういうことか","なるほど","閃い","ひらめい","発見","気づい","気付い","腑に落ち","繋がった","つながった","これだ","わかったぞ","見えた","そういうことだったのか","アイデア","案として","というアイデア","という案"] },
     calm:     { color:"#B8A180", colorDark:"#6B5B3F", label:"おだやか", glow:false,
                 words:["普通","ふつう","まあまあ","そうですね","了解","わかりました","静か","穏やか","おだやか","落ち着"] }
   };
@@ -36,8 +36,12 @@
     // 「んじゃないか/かも/かもしれない」などの仮説語尾が同じ文に共存するとき、
     // 確定した気づきではなく「思いついた瞬間」としてひらめき判定する。
     // 「気がする」等はthought側にも語彙・語尾双方で乗るため、重みを強めに設定して優先させる。
-    { key:"insight", weight:8, test:/(面白|おもしろ|良さそう|よさそう|イケ|いけ|アリ|あり(かも)?|いいかも|良いかも).*(んじゃない|かもしれない|かも|気がする)/ },
-    { key:"insight", weight:8, test:/(んじゃないか|かもしれない).*(面白|おもしろ|良さそう|よさそう|イケ|いけ)/ }
+    { key:"insight", weight:8, test:/(面白|おもしろ|おもろ|良さそう|よさそう|イケ|いけ|アリ|あり(かも)?|いいかも|良いかも).*(んじゃない|かもしれない|かも|気がする)/ },
+    { key:"insight", weight:8, test:/(んじゃないか|かもしれない).*(面白|おもしろ|おもろ|良さそう|よさそう|イケ|いけ)/ },
+    // アイデア提案の文脈: 評価語や「〜も」「〜けど」のような並列・提案の言い回しが
+    // 同じ文にあれば、確定した気づきでなくとも「思いつき」としてひらめき寄りに扱う。
+    { key:"insight", weight:5, test:/(面白|おもしろ|おもろ|良さそう|よさそう|イケ|いけ).*(けど|も|という|といった|みたいな)/ },
+    { key:"insight", weight:4, test:/(アイデア|案)(として|も|は|だ|だけど)?/ }
   ];
 
   function classifyEmotion(text){
@@ -376,6 +380,8 @@
   let lastNoteIndex = {};
   let lastPlayedAt = 0;
   let currentChordKey = "calm";
+  let reactPulse = 0; // 発言直後にベースへ経過音を挟む残り回数
+  let hatAccent = 0;  // 発言直後にハイハットを強める残り回数
 
   function ensureAudio(){
     if (synth) return;
@@ -409,20 +415,29 @@
   }
 
   function setupGroove(){
-    // ウォーキングベース: 4分音符ごとにコードトーンを巡回して歩く
+    // ウォーキングベース: 4分音符ごとにコードトーンを巡回して歩く。
+    // 発言直後は「反応」として経過音を1つ挟み、単調なループにアクセントを作る。
     let bassStep = 0;
     new Tone.Loop((time) => {
       if (!grooveOn) return;
       const chord = CHORDS[currentChordKey] || CHORDS.calm;
       const note = chord[bassStep % chord.length];
       bassSynth.triggerAttackRelease(Tone.Frequency(note).transpose(-12), "4n", time, 0.55);
+      if (reactPulse > 0){
+        reactPulse--;
+        const passingIdx = (bassStep + 1) % chord.length;
+        const passing = chord[passingIdx];
+        bassSynth.triggerAttackRelease(Tone.Frequency(passing).transpose(-12), "8n", time + Tone.Time("8n").toSeconds(), 0.4);
+      }
       bassStep++;
     }, "4n").start(0);
 
-    // ブラシのハイハット: 8分音符でごく控えめに
+    // ブラシのハイハット: 8分音符でごく控えめに。発言直後は少し粒立ちよく強める。
     new Tone.Loop((time) => {
       if (!grooveOn) return;
-      hatSynth.triggerAttackRelease("16n", time, 0.3);
+      const vel = hatAccent > 0 ? 0.55 : 0.3;
+      if (hatAccent > 0) hatAccent--;
+      hatSynth.triggerAttackRelease("16n", time, vel);
     }, "8n").start("8n");
 
     // コードパッド: 2小節ごとにやわらかく敷く
@@ -473,6 +488,10 @@
     // 拍には強制的に揃えず、わずかな人間的なタメだけ加えて即興感を残す
     const humanize = isCallResponse ? Common.random(-0.02, 0.01) : Common.random(-0.04, 0.04);
     synth.triggerAttackRelease(note, dur, Tone.now() + Math.max(0, humanize), velocity);
+
+    // 発言をきっかけに背景のグルーヴが少しだけ反応する（セッション相手が応答する感覚）
+    reactPulse = 1;
+    hatAccent = 3;
   }
 
   /* ============================================================
@@ -551,14 +570,44 @@
         statusText.textContent = "音声認識でエラーが発生しました";
       }
     };
+    // isFinalの確定を待たず、無音が続いたら現時点のinterim結果を確定扱いにする。
+    // 日本語は句読点なしで話すことが多く、ブラウザのisFinal判定が遅れがちなため。
+    let silenceTimer = null;
+    let pendingInterim = "";
+    const SILENCE_MS = 1100;
+
+    function scheduleSilenceCommit(){
+      clearTimeout(silenceTimer);
+      silenceTimer = setTimeout(function(){
+        if (pendingInterim.trim()){
+          const text = pendingInterim;
+          pendingInterim = "";
+          handleFinalText(text);
+        }
+      }, SILENCE_MS);
+    }
+
     recognition.onresult = function(event){
       let interim = "";
+      let hadFinal = false;
       for (let i = event.resultIndex; i < event.results.length; i++){
         const res = event.results[i];
-        if (res.isFinal) handleFinalText(res[0].transcript);
-        else interim += res[0].transcript;
+        if (res.isFinal){
+          hadFinal = true;
+          pendingInterim = "";
+          clearTimeout(silenceTimer);
+          handleFinalText(res[0].transcript);
+        } else {
+          interim += res[0].transcript;
+        }
       }
-      if (interim) transcriptText.textContent = interim;
+      if (interim){
+        transcriptText.textContent = interim;
+        pendingInterim = interim;
+        scheduleSilenceCommit();
+      } else if (hadFinal){
+        clearTimeout(silenceTimer);
+      }
     };
 
     micBtn.addEventListener("click", async function(){
