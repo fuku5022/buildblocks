@@ -31,7 +31,13 @@
     { key:"thought", weight:2, test:/[?？]$/ },
     { key:"thought", weight:2, test:/^(そもそも|つまり|要するに|結局|一方で|逆に|仮に|例えば|たとえば)/ },
     { key:"surprise", weight:2, test:/[!！]{1,}$/ },
-    { key:"insight", weight:3, test:/^(あ、|あっ、|そうか、?|なるほど、?)/ }
+    { key:"insight", weight:3, test:/^(あ、|あっ、|そうか、?|なるほど、?)/ },
+    // アイデアの兆し: 「面白い/良さそう/イケる/アリ」などの評価語 と
+    // 「んじゃないか/かも/かもしれない」などの仮説語尾が同じ文に共存するとき、
+    // 確定した気づきではなく「思いついた瞬間」としてひらめき判定する。
+    // 「気がする」等はthought側にも語彙・語尾双方で乗るため、重みを強めに設定して優先させる。
+    { key:"insight", weight:8, test:/(面白|おもしろ|良さそう|よさそう|イケ|いけ|アリ|あり(かも)?|いいかも|良いかも).*(んじゃない|かもしれない|かも|気がする)/ },
+    { key:"insight", weight:8, test:/(んじゃないか|かもしれない).*(面白|おもしろ|良さそう|よさそう|イケ|いけ)/ }
   ];
 
   function classifyEmotion(text){
@@ -326,7 +332,11 @@
   }
 
   /* ============================================================
-     音楽: 感情=スケール/音色、語尾=アーティキュレーション、速さ=テンポ
+     音楽: ジャズセッション風の仕組み
+     - 背景に控えめなウォーキングベース＋ブラシのハイハットを常時流す（グルーヴの土台）
+     - 発言の音は拍に強制クオンタイズしない。直前の発言との「間」が近いほど、
+       まるで会話のキャッチボールのように音程を近づけ、リズムを詰めて「呼応」させる
+     - 感情ごとにコードトーンを持たせ、直近の感情に応じてコードがゆるやかに移行する
      ============================================================ */
   const SCALES = {
     joy:      ["C4","D4","E4","G4","A4","C5","D5"],
@@ -337,6 +347,16 @@
     insight:  ["C5","E5","G5","B5","C6"],
     calm:     ["G3","A3","C4","D4","E4","G4"]
   };
+  // 感情ごとのコード（ジャズ的な7th/6thサウンド）。背景パッドがこの和音へ滑らかに移行する。
+  const CHORDS = {
+    joy:      ["C4","E4","G4","B4"],   // Cmaj7 明るく解決
+    anger:    ["C3","D#3","F#3","A3"], // Cdim7 緊張感
+    sorrow:   ["A3","C4","E4","G4"],   // Am7 内省的
+    surprise: ["E4","G#4","B4","D5"],  // E7 開放的
+    thought:  ["D4","F4","A4","C5"],   // Dm7 思索的
+    insight:  ["C4","E4","G4","A4"],   // C6 発見の明るさ
+    calm:     ["G3","B3","D4","F4"]    // Gmaj7 静けさ
+  };
   const TIMBRE = {
     cube:  "triangle",
     spike: "sawtooth",
@@ -345,17 +365,74 @@
     round: "sine"
   };
 
+  const BPM = 78; // ジャズバラード寄りのゆったりしたテンポ
+
   let synth = null;
+  let bassSynth = null;
+  let hatSynth = null;
+  let padSynth = null;
   let audioReady = false;
+  let grooveOn = true;
   let lastNoteIndex = {};
+  let lastPlayedAt = 0;
+  let currentChordKey = "calm";
 
   function ensureAudio(){
     if (synth) return;
     if (typeof Tone === "undefined") return;
+
     synth = new Tone.PolySynth(Tone.Synth, {
       envelope: { attack: 0.01, decay: 0.25, sustain: 0.15, release: 0.6 },
       volume: -8
     }).toDestination();
+
+    bassSynth = new Tone.MonoSynth({
+      oscillator: { type: "sine" },
+      envelope: { attack: 0.02, decay: 0.2, sustain: 0.3, release: 0.4 },
+      volume: -16
+    }).toDestination();
+
+    hatSynth = new Tone.NoiseSynth({
+      noise: { type: "white" },
+      envelope: { attack: 0.001, decay: 0.06, sustain: 0 },
+      volume: -28
+    }).toDestination();
+
+    padSynth = new Tone.PolySynth(Tone.Synth, {
+      oscillator: { type: "sine" },
+      envelope: { attack: 1.2, decay: 0.5, sustain: 0.6, release: 2.5 },
+      volume: -22
+    }).toDestination();
+
+    Tone.Transport.bpm.value = BPM;
+    setupGroove();
+  }
+
+  function setupGroove(){
+    // ウォーキングベース: 4分音符ごとにコードトーンを巡回して歩く
+    let bassStep = 0;
+    new Tone.Loop((time) => {
+      if (!grooveOn) return;
+      const chord = CHORDS[currentChordKey] || CHORDS.calm;
+      const note = chord[bassStep % chord.length];
+      bassSynth.triggerAttackRelease(Tone.Frequency(note).transpose(-12), "4n", time, 0.55);
+      bassStep++;
+    }, "4n").start(0);
+
+    // ブラシのハイハット: 8分音符でごく控えめに
+    new Tone.Loop((time) => {
+      if (!grooveOn) return;
+      hatSynth.triggerAttackRelease("16n", time, 0.3);
+    }, "8n").start("8n");
+
+    // コードパッド: 2小節ごとにやわらかく敷く
+    new Tone.Loop((time) => {
+      if (!grooveOn) return;
+      const chord = CHORDS[currentChordKey] || CHORDS.calm;
+      padSynth.triggerAttackRelease(chord, "2m", time, 0.18);
+    }, "2m").start(0);
+
+    Tone.Transport.start();
   }
 
   async function unlockAudio(){
@@ -367,11 +444,24 @@
     ensureAudio();
   }
 
+  function setGroove(on){
+    grooveOn = on;
+  }
+
   function playNote(emoKey, shape, pace){
     if (!synth) return;
+    currentChordKey = emoKey;
+
     const scale = SCALES[emoKey] || SCALES.calm;
     const prevIdx = lastNoteIndex[emoKey] !== undefined ? lastNoteIndex[emoKey] : Math.floor(scale.length/2);
-    const step = Common.random(-2, 2) | 0;
+
+    // 直前の発言からの間隔が短いほど「呼応」とみなし、音程を近づけステップを小さくする
+    const now = Date.now();
+    const gapSec = (now - lastPlayedAt) / 1000;
+    lastPlayedAt = now;
+    const isCallResponse = gapSec < 2.2;
+    const maxStep = isCallResponse ? 1 : 2;
+    const step = Math.floor(Common.random(-maxStep, maxStep + 1));
     let idx = Math.max(0, Math.min(scale.length - 1, prevIdx + step));
     lastNoteIndex[emoKey] = idx;
     const note = scale[idx];
@@ -379,7 +469,10 @@
     synth.set({ oscillator: { type: TIMBRE[shape] || "sine" } });
     const dur = shape === "spike" || shape === "star" ? "16n" : "8n";
     const velocity = 0.35 + pace * 0.35;
-    synth.triggerAttackRelease(note, dur, undefined, velocity);
+
+    // 拍には強制的に揃えず、わずかな人間的なタメだけ加えて即興感を残す
+    const humanize = isCallResponse ? Common.random(-0.02, 0.01) : Common.random(-0.04, 0.04);
+    synth.triggerAttackRelease(note, dur, Tone.now() + Math.max(0, humanize), velocity);
   }
 
   /* ============================================================
@@ -410,6 +503,7 @@
   const transcriptText = document.getElementById("transcriptText");
   const fallbackInput = document.getElementById("fallbackInput");
   const clearBtn = document.getElementById("clearBtn");
+  const grooveBtn = document.getElementById("grooveBtn");
 
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   let recognition = null;
@@ -494,6 +588,14 @@
   clearBtn.addEventListener("click", function(){
     clearAll();
     statusText.textContent = "積み木を片付けました";
+  });
+
+  grooveBtn.addEventListener("click", async function(){
+    await unlockAudio();
+    const nextOn = !grooveOn;
+    setGroove(nextOn);
+    grooveBtn.textContent = nextOn ? "セッション: オン" : "セッション: オフ";
+    grooveBtn.setAttribute("aria-pressed", String(nextOn));
   });
 
   /* ============================================================
