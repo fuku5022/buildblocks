@@ -56,14 +56,20 @@
   }
 
   /* ============================================================
-     2. 語尾・句読点のリズム判定 — 形を決める軸
+     2. 語尾・言い回しのリズム判定 — 形を決める軸
+     Web Speech APIの認識結果は句読点をほぼ付けないため、
+     句読点ではなく語尾の「音」そのものにマッチさせる。
      ============================================================ */
   const ENDING_RULES = [
-    { key:"casual",  test:/(だよね|じゃん|かも|っしょ|よな|んだ)[。！？]?$/, shape:"round" },
-    { key:"question",test:/[?？]$/, shape:"star" },
-    { key:"formal",  test:/(です|ます|である|ございます)[。]?$/, shape:"cube" },
-    { key:"trail",   test:/(\.\.\.|…|、)$/, shape:"plank" },
-    { key:"sharp",   test:/[!！]$/, shape:"spike" }
+    { key:"question",  test:/(かな|かしら|の|ですか|ますか)?[?？]$/,               shape:"star" },
+    { key:"question2", test:/(なんで|どうして|なぜ).*$/,                            shape:"star" },
+    { key:"casual",    test:/(だよね|だよ|じゃん|かも|っしょ|よな|んだ|んだよ)$/,   shape:"round" },
+    { key:"soft",      test:/(なあ|なぁ|ねえ|ねぇ|よね|よねえ)$/,                    shape:"round" },
+    { key:"formal",    test:/(です|ます|ました|でした|である|ございます)$/,         shape:"cube" },
+    { key:"sharp",     test:/(だ|！|!)$/,                                            shape:"spike" },
+    { key:"trail",     test:/(\.\.\.|…|て|で|けど|が|し)$/,                          shape:"plank" },
+    { key:"chain",     test:/(て|で).*(て|で)/,                                      shape:"L" },
+    { key:"assertive", test:/^.{1,8}(だ|だね|でしょ)$/,                              shape:"prism" }
   ];
   function classifyEnding(text){
     const trimmed = text.trim();
@@ -72,7 +78,9 @@
     }
     const commaCount = (trimmed.match(/、/g) || []).length;
     if (commaCount >= 2) return "plank";
-    return "cube";
+    // どれにも当てはまらない場合はランダムに割り振り、単調さを避ける
+    const fallback = ["cube","round","prism","blob"];
+    return fallback[Math.floor(Math.random() * fallback.length)];
   }
 
   /* ============================================================
@@ -179,19 +187,36 @@
   function makeBlockBody(x, y, emoKey, shape, size){
     const emo = EMOTIONS[emoKey];
     const opts = {
-      restitution: 0.08, friction: 0.62, frictionStatic: 0.9, density: 0.0016,
+      restitution: 0.02, friction: 0.95, frictionStatic: 1.1, frictionAir: 0.012, density: 0.0022,
       render: { fillStyle: emo.color, strokeStyle: emo.colorDark, lineWidth: 2 }
     };
     let body;
     switch(shape){
-      case "cube":     body = Bodies.rectangle(x, y, size, size, opts); break;
-      case "spike":     body = Bodies.polygon(x, y, 3, size*0.62, opts); break;
-      case "plank":     body = Bodies.rectangle(x, y, size*1.9, size*0.5, opts); break;
-      case "star":      body = Bodies.polygon(x, y, 6, size*0.58, opts); break;
-      case "round":
-      default:          body = Bodies.polygon(x, y, 16, size*0.52, opts); break;
+      case "cube":      body = Bodies.rectangle(x, y, size, size, opts); break;
+      case "spike":      body = Bodies.polygon(x, y, 3, size*0.62, opts); break;
+      case "plank":      body = Bodies.rectangle(x, y, size*1.9, size*0.5, opts); break;
+      case "star":       body = Bodies.polygon(x, y, 6, size*0.58, opts); break;
+      case "prism":      body = Bodies.polygon(x, y, 5, size*0.56, opts); break;
+      case "round":      body = Bodies.polygon(x, y, 16, size*0.5, { ...opts, friction: 1.15, frictionStatic: 1.3 }); break;
+      case "L": {
+        // L字はrectangleのパーツを合成した複合ボディ。
+        // Matter.jsは複合ボディの各パーツごとにrenderを見るため、両方に明示指定する。
+        const s = size * 0.62;
+        const partOpts = { render: { fillStyle: emo.color, strokeStyle: emo.colorDark, lineWidth: 2 } };
+        const partA = Bodies.rectangle(-s*0.25, 0, s*0.5, s*1.4, partOpts);
+        const partB = Bodies.rectangle(s*0.25, s*0.45, s*1.0, s*0.5, partOpts);
+        body = Matter.Body.create({ parts: [partA, partB], ...opts });
+        break;
+      }
+      case "blob": {
+        // 不定形多角形（角数と半径をランダムに揺らす）
+        const sides = 5 + Math.floor(Common.random(0, 3));
+        body = Bodies.polygon(x, y, sides, size*0.55, opts);
+        break;
+      }
+      default:           body = Bodies.rectangle(x, y, size, size, opts); break;
     }
-    Body.setAngle(body, Common.random(-0.15, 0.15));
+    Body.setAngle(body, Common.random(-0.1, 0.1));
     return body;
   }
 
