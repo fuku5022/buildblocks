@@ -3,41 +3,52 @@
 
   /* ============================================================
      1. 感情キーワード判定 — 色を決める軸
+     スコアリング方式: 単語一致 + 語尾パターン + 接続表現を加点合成
      ============================================================ */
   const EMOTIONS = {
-    joy:      { color:"#C97D4A", colorDark:"#7A4325", label:"よろこび",
-                words:["嬉しい","うれしい","楽しい","たのしい","最高","好き","すき","やった","ありがとう","わくわく","幸せ","しあわせ","よかった","良かった","面白い","おもしろい","ハッピー"] },
-    anger:    { color:"#8B3A2E", colorDark:"#501F17", label:"いかり",
-                words:["怒","むかつく","ムカつく","腹立つ","許せない","うざい","最悪","イライラ","いらいら","くそ","嫌い","きらい","うるさい","ふざけるな"] },
-    sorrow:   { color:"#4A5D6B", colorDark:"#263039", label:"かなしみ",
-                words:["悲しい","かなしい","つらい","辛い","泣","さみしい","寂しい","しんどい","疲れた","つかれた","不安","こわい","怖い","落ち込","へこむ"] },
-    surprise: { color:"#D4A843", colorDark:"#7A5C1B", label:"おどろき",
+    joy:      { color:"#C97D4A", colorDark:"#7A4325", label:"よろこび", glow:false,
+                words:["嬉しい","うれしい","楽しい","たのしい","最高","好き","すき","やった","ありがとう","わくわく","幸せ","しあわせ","よかった","良かった","面白い","おもしろい","ハッピー","嬉","楽"] },
+    anger:    { color:"#8B3A2E", colorDark:"#501F17", label:"いかり", glow:false,
+                words:["怒","むかつく","ムカつく","腹立つ","許せない","うざい","最悪","イライラ","いらいら","くそ","嫌い","きらい","うるさい","ふざけるな","無理","だるい"] },
+    sorrow:   { color:"#4A5D6B", colorDark:"#263039", label:"かなしみ", glow:false,
+                words:["悲しい","かなしい","つらい","辛い","泣","さみしい","寂しい","しんどい","疲れた","つかれた","不安","こわい","怖い","落ち込","へこむ","無理かも"] },
+    surprise: { color:"#D4A843", colorDark:"#7A5C1B", label:"おどろき", glow:false,
                 words:["驚","びっくり","えっ","マジ","まじ","うそ","嘘","すごい","スゴイ","信じられない","なんと","衝撃","突然"] },
-    thought:  { color:"#6E7B57", colorDark:"#3C4530", label:"かんがえ",
-                words:["なんで","どうして","気づき","気付き","本質","つまり","要するに","考える","かんがえ","思うに","たぶん","おそらく","仮説","疑問"] },
-    calm:     { color:"#B8A180", colorDark:"#6B5B3F", label:"おだやか",
-                words:["普通","ふつう","まあまあ","そうですね","なるほど","了解","わかった","静か","穏やか","おだやか","落ち着"] }
+    thought:  { color:"#6E7B57", colorDark:"#3C4530", label:"かんがえ", glow:false,
+                words:["なんで","どうして","気づき","気付き","本質","つまり","要するに","考える","かんがえ","思うに","たぶん","おそらく","仮説","疑問","なぜ","かもしれない","かも","と思う","って感じ","気がする","はず","のかな","のかも","だろう","だろうか","というか","逆に言うと","言い換えると","結局","そもそも","前提として","仮に","例えば","たとえば","一方で","むしろ"] },
+    insight:  { color:"#C9A84C", colorDark:"#6E5A1F", label:"ひらめき", glow:true,
+                words:["わかった","分かった","そうか","そういうことか","なるほど","閃いた","ひらめいた","発見","気づいた","気付いた","腑に落ち","繋がった","つながった","これだ","わかったぞ","見えた","そういうことだったのか"] },
+    calm:     { color:"#B8A180", colorDark:"#6B5B3F", label:"おだやか", glow:false,
+                words:["普通","ふつう","まあまあ","そうですね","了解","わかりました","静か","穏やか","おだやか","落ち着"] }
   };
   const EMOTION_KEYS = Object.keys(EMOTIONS);
 
   function classifyEmotion(text){
-    let best = null, bestScore = 0;
+    let scores = {};
     for (const key of EMOTION_KEYS){
-      const rule = EMOTIONS[key];
       let score = 0;
-      for (const w of rule.words) if (text.indexOf(w) !== -1) score++;
-      if (score > bestScore){ bestScore = score; best = key; }
+      for (const w of EMOTIONS[key].words){
+        if (text.indexOf(w) !== -1) score += 2;
+      }
+      scores[key] = score;
     }
-    if (best) return best;
-    if (/[!！]{1,}/.test(text)) return "surprise";
-    if (/なんで|どうして|かな[。、]?$/.test(text)) return "thought";
-    if (/[?？]{1,}/.test(text)) return "sorrow";
-    return "calm";
+
+    // 語尾・記号による補助シグナル
+    if (/[!！]{1,}/.test(text)) scores.surprise += 1;
+    if (/[?？]{1,}/.test(text)) scores.thought += 1;
+    if (/(かな|かも|だろう|と思う|気がする)[。、]?$/.test(text)) scores.thought += 2;
+    if (/(なんで|どうして|なぜ)/.test(text)) scores.thought += 1;
+
+    let best = "calm", bestScore = 0;
+    for (const key of EMOTION_KEYS){
+      if (scores[key] > bestScore){ bestScore = scores[key]; best = key; }
+    }
+    if (bestScore === 0) return "calm";
+    return best;
   }
 
   /* ============================================================
      2. 語尾・句読点のリズム判定 — 形を決める軸
-     語尾が砕けている/硬い、句読点が多い/少ない、で角ばり具合を変える
      ============================================================ */
   const ENDING_RULES = [
     { key:"casual",  test:/(だよね|じゃん|かも|っしょ|よな|んだ)[。！？]?$/, shape:"round" },
@@ -58,7 +69,6 @@
 
   /* ============================================================
      3. 話す速さ — 大きさ・音のテンポを決める軸
-     発話の文字数 ÷ 経過時間(秒) で概算する
      ============================================================ */
   let lastFinalAt = Date.now();
   function estimatePace(text){
@@ -73,6 +83,29 @@
     const base = 34 + Math.min(30, text.length * 1.1);
     const paceBoost = pace * 22;
     return Math.round(base + paceBoost);
+  }
+
+  /* ============================================================
+     永続化: localStorageに発言ログを保存し、次回起動時に復元
+     ============================================================ */
+  const STORAGE_KEY = "kotoba-tsumiki:blocks:v1";
+  function saveHistory(){
+    try{
+      const data = blocks.map(b => ({ emoKey:b.emoKey, shape:b.shape, size:b.size, text:b.text }));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    }catch(e){ /* storage unavailable, ignore */ }
+  }
+  function loadHistory(){
+    try{
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return [];
+      const data = JSON.parse(raw);
+      if (!Array.isArray(data)) return [];
+      return data.slice(-60);
+    }catch(e){ return []; }
+  }
+  function clearHistory(){
+    try{ localStorage.removeItem(STORAGE_KEY); }catch(e){}
   }
 
   /* ============================================================
@@ -134,7 +167,7 @@
   }
   function rebuildWalls(){ World.remove(world, walls); buildWalls(); }
 
-  /* ---------- 木片の形状生成（語尾リズムで形状を決定） ---------- */
+  /* ---------- 木片の形状生成 ---------- */
   function makeBlockBody(x, y, emoKey, shape, size){
     const emo = EMOTIONS[emoKey];
     const opts = {
@@ -155,24 +188,30 @@
   }
 
   /* ---------- 落下→積む ---------- */
-  function dropBlock(text){
+  function dropBlock(text, opts){
+    opts = opts || {};
     const emoKey = classifyEmotion(text);
     const shape = classifyEnding(text);
-    const pace = estimatePace(text);
+    const pace = opts.silent ? 0.3 : estimatePace(text);
     const size = sizeFromPace(text, pace);
-    const x = Common.random(W*0.28, W*0.72);
+    const x = opts.x !== undefined ? opts.x : Common.random(W*0.28, W*0.72);
     const y = -60;
     const body = makeBlockBody(x, y, emoKey, shape, size);
     Body.setAngularVelocity(body, Common.random(-0.06, 0.06));
     World.add(world, body);
-    blocks.push({ body, emoKey, shape, size, text, pace });
+    const glow = !!EMOTIONS[emoKey].glow;
+    const entry = { body, emoKey, shape, size, text, pace, glow, bornAt: Date.now() };
+    blocks.push(entry);
 
     if (blocks.length > 90){
       const old = blocks.shift();
       World.remove(world, old.body);
     }
-    playNote(emoKey, shape, pace);
-    return { emoKey, shape, pace };
+    if (!opts.silent){
+      playNote(emoKey, shape, pace);
+      saveHistory();
+    }
+    return { emoKey, shape, pace, glow };
   }
 
   /* ---------- 崩落演出 ---------- */
@@ -200,12 +239,36 @@
   function clearAll(){
     for (const b of blocks) World.remove(world, b.body);
     blocks = [];
+    clearHistory();
   }
 
-  /* ---------- 木目テクスチャ ---------- */
+  /* ---------- 木目テクスチャ + ひらめきの発光 ---------- */
   function setupWoodGrainOverlay(){
     Events.on(render, "afterRender", function(){
       const ctx = render.context;
+      const now = Date.now();
+
+      // 発光レイヤー（木目より先に描いて下敷きにする）
+      ctx.save();
+      for (const b of blocks){
+        if (!b.glow) continue;
+        const body = b.body;
+        const age = now - b.bornAt;
+        const burst = Math.max(0, 1 - age / 900); // 出現直後にパッと明るい
+        const ambient = 0.35 + Math.sin(now/700 + body.position.x) * 0.12; // その後もじんわり
+        const alpha = Math.min(0.85, ambient + burst * 0.9);
+        const s = b.size;
+        const grad = ctx.createRadialGradient(body.position.x, body.position.y, s*0.1, body.position.x, body.position.y, s*1.1);
+        grad.addColorStop(0, "rgba(255, 226, 140," + alpha + ")");
+        grad.addColorStop(1, "rgba(255, 226, 140, 0)");
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(body.position.x, body.position.y, s*1.1, 0, Math.PI*2);
+        ctx.fill();
+      }
+      ctx.restore();
+
+      // 木目
       ctx.save();
       ctx.globalAlpha = 0.28;
       ctx.lineWidth = 1;
@@ -238,6 +301,7 @@
     sorrow:   ["A3","C4","D4","E4","F4","A4"],
     surprise: ["E5","G5","A5","B5","D6"],
     thought:  ["D4","F4","G4","A4","C5","D5"],
+    insight:  ["C5","E5","G5","B5","C6"],
     calm:     ["G3","A3","C4","D4","E4","G4"]
   };
   const TIMBRE = {
@@ -325,7 +389,9 @@
     showGhost(text);
     const result = dropBlock(text);
     const emo = EMOTIONS[result.emoKey];
-    statusText.textContent = "「" + emo.label + "」の木片を積みました";
+    statusText.textContent = result.glow
+      ? "「" + emo.label + "」が光りました"
+      : "「" + emo.label + "」の木片を積みました";
   }
 
   if (SpeechRecognition){
@@ -398,8 +464,26 @@
   });
 
   /* ============================================================
-     起動
+     起動: 保存された履歴から積み木を復元
      ============================================================ */
+  function restoreHistory(){
+    const history = loadHistory();
+    if (!history.length) return;
+    let i = 0;
+    const step = function(){
+      if (i >= history.length) return;
+      const item = history[i];
+      const x = Common.random(W*0.28, W*0.72);
+      const body = makeBlockBody(x, -60, item.emoKey, item.shape, item.size);
+      World.add(world, body);
+      const glow = !!EMOTIONS[item.emoKey] && !!EMOTIONS[item.emoKey].glow;
+      blocks.push({ body, emoKey: item.emoKey, shape: item.shape, size: item.size, text: item.text, pace: 0.3, glow, bornAt: Date.now() - 5000 });
+      i++;
+      setTimeout(step, 55);
+    };
+    step();
+  }
+
   function boot(){
     const rect = stageEl.getBoundingClientRect();
     W = Math.round(rect.width);
@@ -407,6 +491,7 @@
     initPhysics();
     setupWoodGrainOverlay();
     window.addEventListener("resize", debounce(resizeStage, 200));
+    restoreHistory();
   }
   function debounce(fn, wait){
     let t;
