@@ -336,11 +336,11 @@
   }
 
   /* ============================================================
-     音楽: ジャズセッション風の仕組み
-     - 背景に控えめなウォーキングベース＋ブラシのハイハットを常時流す（グルーヴの土台）
-     - 発言の音は拍に強制クオンタイズしない。直前の発言との「間」が近いほど、
-       まるで会話のキャッチボールのように音程を近づけ、リズムを詰めて「呼応」させる
-     - 感情ごとにコードトーンを持たせ、直近の感情に応じてコードがゆるやかに移行する
+     音楽: 会話全体の流れをジャズセッションとして表現する
+     - テンポ: 直近の発言頻度でBPMが動的に変わる（テンポよく話すほど速く、間が空くほど遅く）
+     - 不協和: 直近の感情が対立するほど、コードにテンションノートが混ざる
+     - 収束: 同じ感情が続くほど、コードが解決に向かい落ち着く
+     これらは常時計算され、ウォーキングベース・ブラシ・パッドのループになめらかに反映される。
      ============================================================ */
   const SCALES = {
     joy:      ["C4","D4","E4","G4","A4","C5","D5"],
@@ -351,15 +351,35 @@
     insight:  ["C5","E5","G5","B5","C6"],
     calm:     ["G3","A3","C4","D4","E4","G4"]
   };
-  // 感情ごとのコード（ジャズ的な7th/6thサウンド）。背景パッドがこの和音へ滑らかに移行する。
+  // 感情ごとの基本コード（協和トーン）
   const CHORDS = {
-    joy:      ["C4","E4","G4","B4"],   // Cmaj7 明るく解決
-    anger:    ["C3","D#3","F#3","A3"], // Cdim7 緊張感
-    sorrow:   ["A3","C4","E4","G4"],   // Am7 内省的
-    surprise: ["E4","G#4","B4","D5"],  // E7 開放的
-    thought:  ["D4","F4","A4","C5"],   // Dm7 思索的
-    insight:  ["C4","E4","G4","A4"],   // C6 発見の明るさ
-    calm:     ["G3","B3","D4","F4"]    // Gmaj7 静けさ
+    joy:      ["C4","E4","G4","B4"],   // Cmaj7
+    anger:    ["C3","D#3","F#3","A3"], // Cdim7
+    sorrow:   ["A3","C4","E4","G4"],   // Am7
+    surprise: ["E4","G#4","B4","D5"],  // E7
+    thought:  ["D4","F4","A4","C5"],   // Dm7
+    insight:  ["C4","E4","G4","A4"],   // C6
+    calm:     ["G3","B3","D4","F4"]    // Gmaj7
+  };
+  // コードに足すテンションノート（不協和が強いほど混ぜる半音・増4度系の緊張音）
+  const TENSIONS = {
+    joy:      "F#4",
+    anger:    "F4",
+    sorrow:   "Bb3",
+    surprise: "C5",
+    thought:  "G#4",
+    insight:  "D#5",
+    calm:     "C#4"
+  };
+  // 感情同士の「対立度」。0=近い(協和), 1=対立(不協和)
+  const EMOTION_DISTANCE = {
+    joy:      { joy:0, insight:0.1, calm:0.3, thought:0.4, surprise:0.5, sorrow:0.8, anger:1.0 },
+    anger:    { anger:0, sorrow:0.4, thought:0.5, surprise:0.6, calm:0.8, insight:0.9, joy:1.0 },
+    sorrow:   { sorrow:0, anger:0.4, thought:0.3, calm:0.4, insight:0.7, surprise:0.7, joy:0.8 },
+    surprise: { surprise:0, insight:0.3, joy:0.5, thought:0.5, anger:0.6, calm:0.6, sorrow:0.7 },
+    thought:  { thought:0, insight:0.2, sorrow:0.3, joy:0.4, calm:0.4, anger:0.5, surprise:0.5 },
+    insight:  { insight:0, thought:0.2, joy:0.1, surprise:0.3, calm:0.4, sorrow:0.7, anger:0.9 },
+    calm:     { calm:0, thought:0.4, joy:0.3, sorrow:0.4, surprise:0.6, anger:0.8, insight:0.4 }
   };
   const TIMBRE = {
     cube:  "triangle",
@@ -369,7 +389,7 @@
     round: "sine"
   };
 
-  const BPM = 78; // ジャズバラード寄りのゆったりしたテンポ
+  const BPM_MIN = 58, BPM_MID = 78, BPM_MAX = 132;
 
   let synth = null;
   let bassSynth = null;
@@ -380,8 +400,57 @@
   let lastNoteIndex = {};
   let lastPlayedAt = 0;
   let currentChordKey = "calm";
-  let reactPulse = 0; // 発言直後にベースへ経過音を挟む残り回数
-  let hatAccent = 0;  // 発言直後にハイハットを強める残り回数
+  let reactPulse = 0;
+  let hatAccent = 0;
+
+  // 直近の発言履歴（感情とタイムスタンプ）。会話の状態計算に使う。
+  let emotionHistory = []; // [{ key, at }]
+  const HISTORY_WINDOW_MS = 30000;
+
+  function recordEmotionHistory(emoKey){
+    const now = Date.now();
+    emotionHistory.push({ key: emoKey, at: now });
+    emotionHistory = emotionHistory.filter(e => now - e.at < HISTORY_WINDOW_MS).slice(-12);
+  }
+
+  // 直近の発言間隔からBPMを算出。テンポよく話すほど速く、間が空くほど遅くなる。
+  function computeTargetBpm(){
+    if (emotionHistory.length < 2) return BPM_MID;
+    const recent = emotionHistory.slice(-6);
+    let gaps = [];
+    for (let i = 1; i < recent.length; i++){
+      gaps.push(recent[i].at - recent[i-1].at);
+    }
+    const avgGapSec = (gaps.reduce((a,b)=>a+b, 0) / gaps.length) / 1000;
+    // 1秒間隔なら速く、8秒以上なら遅く
+    const t = Math.max(0, Math.min(1, 1 - (avgGapSec - 1) / 7));
+    return Math.round(BPM_MIN + (BPM_MAX - BPM_MIN) * t);
+  }
+
+  // 直近の感情の対立度から不協和度を算出。0=協和、1=強い不協和。
+  function computeDissonance(){
+    if (emotionHistory.length < 2) return 0;
+    const recent = emotionHistory.slice(-4);
+    let total = 0, count = 0;
+    for (let i = 1; i < recent.length; i++){
+      const a = recent[i-1].key, b = recent[i].key;
+      const dist = (EMOTION_DISTANCE[a] && EMOTION_DISTANCE[a][b] !== undefined) ? EMOTION_DISTANCE[a][b] : 0.5;
+      total += dist;
+      count++;
+    }
+    return count ? total / count : 0;
+  }
+
+  // 直近で同じ感情が連続しているほど収束度が高い。0=バラバラ、1=完全に収束。
+  function computeConvergence(){
+    if (emotionHistory.length < 2) return 0;
+    const recent = emotionHistory.slice(-4);
+    let same = 0;
+    for (let i = 1; i < recent.length; i++){
+      if (recent[i].key === recent[i-1].key) same++;
+    }
+    return same / (recent.length - 1);
+  }
 
   function ensureAudio(){
     if (synth) return;
@@ -410,13 +479,23 @@
       volume: -22
     }).toDestination();
 
-    Tone.Transport.bpm.value = BPM;
+    Tone.Transport.bpm.value = BPM_MID;
     setupGroove();
+    startFlowTracker();
+  }
+
+  // BPMを毎秒なめらかに目標値へ寄せていく（急変せずスライドするように）
+  function startFlowTracker(){
+    setInterval(() => {
+      if (!grooveOn || typeof Tone === "undefined") return;
+      const target = computeTargetBpm();
+      const cur = Tone.Transport.bpm.value;
+      const next = cur + (target - cur) * 0.25;
+      Tone.Transport.bpm.rampTo(next, 1.5);
+    }, 2000);
   }
 
   function setupGroove(){
-    // ウォーキングベース: 4分音符ごとにコードトーンを巡回して歩く。
-    // 発言直後は「反応」として経過音を1つ挟み、単調なループにアクセントを作る。
     let bassStep = 0;
     new Tone.Loop((time) => {
       if (!grooveOn) return;
@@ -432,7 +511,6 @@
       bassStep++;
     }, "4n").start(0);
 
-    // ブラシのハイハット: 8分音符でごく控えめに。発言直後は少し粒立ちよく強める。
     new Tone.Loop((time) => {
       if (!grooveOn) return;
       const vel = hatAccent > 0 ? 0.55 : 0.3;
@@ -440,11 +518,22 @@
       hatSynth.triggerAttackRelease("16n", time, vel);
     }, "8n").start("8n");
 
-    // コードパッド: 2小節ごとにやわらかく敷く
+    // コードパッド: 不協和度が高いほどテンションノートを重ね、
+    // 収束度が高いほど和音を薄く協和にまとめる（解決していく感じ）
     new Tone.Loop((time) => {
       if (!grooveOn) return;
       const chord = CHORDS[currentChordKey] || CHORDS.calm;
-      padSynth.triggerAttackRelease(chord, "2m", time, 0.18);
+      const dissonance = computeDissonance();
+      const convergence = computeConvergence();
+      let notes = chord.slice();
+      if (dissonance > 0.45 && TENSIONS[currentChordKey]){
+        notes = notes.concat([TENSIONS[currentChordKey]]);
+      }
+      if (convergence > 0.6){
+        notes = notes.slice(0, 3); // 収束時は音数を減らしすっきり着地させる
+      }
+      const vel = 0.14 + dissonance * 0.12;
+      padSynth.triggerAttackRelease(notes, "2m", time, vel);
     }, "2m").start(0);
 
     Tone.Transport.start();
@@ -466,11 +555,11 @@
   function playNote(emoKey, shape, pace){
     if (!synth) return;
     currentChordKey = emoKey;
+    recordEmotionHistory(emoKey);
 
     const scale = SCALES[emoKey] || SCALES.calm;
     const prevIdx = lastNoteIndex[emoKey] !== undefined ? lastNoteIndex[emoKey] : Math.floor(scale.length/2);
 
-    // 直前の発言からの間隔が短いほど「呼応」とみなし、音程を近づけステップを小さくする
     const now = Date.now();
     const gapSec = (now - lastPlayedAt) / 1000;
     lastPlayedAt = now;
@@ -485,11 +574,9 @@
     const dur = shape === "spike" || shape === "star" ? "16n" : "8n";
     const velocity = 0.35 + pace * 0.35;
 
-    // 拍には強制的に揃えず、わずかな人間的なタメだけ加えて即興感を残す
     const humanize = isCallResponse ? Common.random(-0.02, 0.01) : Common.random(-0.04, 0.04);
     synth.triggerAttackRelease(note, dur, Tone.now() + Math.max(0, humanize), velocity);
 
-    // 発言をきっかけに背景のグルーヴが少しだけ反応する（セッション相手が応答する感覚）
     reactPulse = 1;
     hatAccent = 3;
   }
@@ -528,9 +615,27 @@
   let recognition = null;
   let listening = false;
 
+  let lastCommittedText = "";
+  let lastCommittedAt = 0;
+  const DUP_WINDOW_MS = 4000;
+
+  function isDuplicateOfRecent(text){
+    if (!lastCommittedText) return false;
+    if (Date.now() - lastCommittedAt > DUP_WINDOW_MS) return false;
+    // 同一文、または一方が他方を包含する場合（確定の重複送信で
+    // 「これ面白い」→「これ面白いんじゃないかな」のように後続が伸びるケースを含む）は重複とみなす
+    if (text === lastCommittedText) return true;
+    if (text.length > lastCommittedText.length && text.indexOf(lastCommittedText) !== -1) return true;
+    if (lastCommittedText.length > text.length && lastCommittedText.indexOf(text) !== -1) return true;
+    return false;
+  }
+
   function handleFinalText(text){
     text = text.trim();
     if (!text) return;
+    if (isDuplicateOfRecent(text)) return;
+    lastCommittedText = text;
+    lastCommittedAt = Date.now();
     transcriptText.textContent = text;
     showGhost(text);
     const result = dropBlock(text);
