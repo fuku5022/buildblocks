@@ -399,6 +399,7 @@
   let bassSynth = null;
   let hatSynth = null;
   let padSynth = null;
+  let leadSynth = null;
   let audioReady = false;
   let grooveOn = true;
   let lastNoteIndex = {};
@@ -417,17 +418,22 @@
     emotionHistory = emotionHistory.filter(e => now - e.at < HISTORY_WINDOW_MS).slice(-12);
   }
 
-  // 直近の発言間隔からBPMを算出。テンポよく話すほど速く、間が空くほど遅くなる。
-  function computeTargetBpm(){
-    if (emotionHistory.length < 2) return BPM_MID;
+  // 直近の発言間隔から「盛り上がり度」を0〜1で算出。テンポよく話すほど高い。
+  function computeEnergy(){
+    if (emotionHistory.length < 2) return 0;
     const recent = emotionHistory.slice(-6);
     let gaps = [];
     for (let i = 1; i < recent.length; i++){
       gaps.push(recent[i].at - recent[i-1].at);
     }
     const avgGapSec = (gaps.reduce((a,b)=>a+b, 0) / gaps.length) / 1000;
-    // 1秒間隔なら速く、8秒以上なら遅く
-    const t = Math.max(0, Math.min(1, 1 - (avgGapSec - 1) / 7));
+    return Math.max(0, Math.min(1, 1 - (avgGapSec - 1) / 7));
+  }
+
+  // 直近の発言間隔からBPMを算出。テンポよく話すほど速く、間が空くほど遅くなる。
+  function computeTargetBpm(){
+    if (emotionHistory.length < 2) return BPM_MID;
+    const t = computeEnergy();
     return Math.round(BPM_MIN + (BPM_MAX - BPM_MIN) * t);
   }
 
@@ -499,6 +505,14 @@
       volume: -20
     }).connect(padTremolo);
 
+    // 議論が盛り上がっているときだけ加わる、トランペット風の単旋律レイヤー
+    leadSynth = new Tone.MonoSynth({
+      oscillator: { type: "sawtooth" },
+      envelope: { attack: 0.02, decay: 0.15, sustain: 0.3, release: 0.3 },
+      filterEnvelope: { attack: 0.02, decay: 0.3, sustain: 0.4, release: 0.4, baseFrequency: 800, octaves: 2.5 },
+      volume: -20
+    }).toDestination();
+
     Tone.Transport.bpm.value = BPM_MID;
     setupGroove();
     startFlowTracker();
@@ -516,26 +530,45 @@
   }
 
   function setupGroove(){
-    let bassStep = 0;
+    // ウォーキングベース: コード構成音を主軸に、拍ごとに経過音・隣接音・跳躍を織り交ぜて
+    // 単調な巡回にならないようにする。4拍で「コード音→経過音→コード音→隣接音」のように動く。
+    let beatInBar = 0;
     new Tone.Loop((time) => {
       if (!grooveOn) return;
       const chord = CHORDS[currentChordKey] || CHORDS.calm;
-      const note = chord[bassStep % chord.length];
-      bassSynth.triggerAttackRelease(Tone.Frequency(note).transpose(-12), "4n", time, 0.55);
-      if (reactPulse > 0){
-        reactPulse--;
-        const passingIdx = (bassStep + 1) % chord.length;
-        const passing = chord[passingIdx];
-        bassSynth.triggerAttackRelease(Tone.Frequency(passing).transpose(-12), "8n", time + Tone.Time("8n").toSeconds(), 0.4);
+      const rootIdx = 0;
+      let note;
+      const b = beatInBar % 4;
+      if (b === 0){
+        note = chord[rootIdx];
+      } else if (b === 2){
+        // コードの5度あたりを狙う
+        note = chord[Math.min(2, chord.length - 1)];
+      } else {
+        // 経過音・隣接音として、直前の音から半音〜全音動く
+        const baseNote = Tone.Frequency(chord[rootIdx]).transpose(b === 1 ? -2 : 1);
+        note = baseNote;
       }
-      bassStep++;
+      const vel = 0.42 + (b === 0 ? 0.16 : 0);
+      bassSynth.triggerAttackRelease(Tone.Frequency(note).transpose(-12), "4n", time, vel);
+      if (reactPulse > 0 && b === 3){
+        reactPulse--;
+        const passing = chord[1 % chord.length];
+        bassSynth.triggerAttackRelease(Tone.Frequency(passing).transpose(-12), "8n", time + Tone.Time("8n").toSeconds(), 0.35);
+      }
+      beatInBar++;
     }, "4n").start(0);
 
+    // ブラシのハイハット: 機械的な一定間隔ではなく、ジャズブラシらしく不規則に間引く。
+    // 発言直後だけ少しだけ粒立ちよく反応する。
     new Tone.Loop((time) => {
       if (!grooveOn) return;
-      const vel = hatAccent > 0 ? 0.4 : 0.18;
+      // 8分音符のグリッド上でも、確率的に音を抜いて揺らぎを作る（機械的な連打感を消す）
+      if (Math.random() < 0.35 && hatAccent === 0) return;
+      const vel = hatAccent > 0 ? 0.32 : 0.1 + Math.random() * 0.08;
       if (hatAccent > 0) hatAccent--;
-      hatSynth.triggerAttackRelease("16n", time, vel);
+      const jitter = Common.random(-0.015, 0.015);
+      hatSynth.triggerAttackRelease("16n", time + Math.max(0, jitter), vel);
     }, "8n").start("8n");
 
     // コードパッド: 議論がうまく噛み合っていない時（強い対立）だけテンションを薄く滲ませ、
@@ -555,6 +588,23 @@
       const vel = 0.16 + Math.max(0, dissonance - 0.5) * 0.1;
       padSynth.triggerAttackRelease(notes, "2m", time, vel);
     }, "2m").start(0);
+
+    // トランペット風のリード: 議論が盛り上がっている（発言頻度が高い）ときだけ、
+    // 1小節ごとに一定確率で単旋律のフレーズを差し込む。落ち着くと自然に鳴らなくなる。
+    new Tone.Loop((time) => {
+      if (!grooveOn) return;
+      const energy = computeEnergy();
+      if (energy < 0.35) return; // 盛り上がっていないときは鳴らさない
+      if (Math.random() > energy * 0.8) return;
+      const scale = SCALES[currentChordKey] || SCALES.calm;
+      const phraseLen = 2 + Math.floor(Common.random(0, 2));
+      let t = time;
+      for (let i = 0; i < phraseLen; i++){
+        const note = scale[Math.floor(Common.random(0, scale.length))];
+        leadSynth.triggerAttackRelease(Tone.Frequency(note).transpose(12), "16n", t, 0.22 + energy * 0.15);
+        t += Tone.Time("16n").toSeconds() * (1 + Math.random());
+      }
+    }, "1m").start(0);
 
     Tone.Transport.start();
   }
