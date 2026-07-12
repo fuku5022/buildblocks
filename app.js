@@ -336,42 +336,49 @@
   }
 
   /* ============================================================
-     音楽: 会話全体の流れをジャズセッションとして表現する
-     - テンポ: 直近の発言頻度でBPMが動的に変わる（テンポよく話すほど速く、間が空くほど遅く）
-     - 不協和: 直近の感情が対立するほど、コードにテンションノートが混ざる
-     - 収束: 同じ感情が続くほど、コードが解決に向かい落ち着く
-     これらは常時計算され、ウォーキングベース・ブラシ・パッドのループになめらかに反映される。
+     音楽: 本格的なジャズ作曲エンジン
+     - 感情ごとにキー（調）を割り当て、そのキー内で ii-V-I 進行を常時回す
+     - ウォーキングベースは固定パターンではなく、次のコードへ向けて毎回その場で生成する
+     - リード(トランペット風)はモチーフ→反復→解決という型でフレーズを都度生成する
+     - 8分音符はスウィングさせ、ジャズらしいタイム感にする
      ============================================================ */
-  const SCALES = {
-    joy:      ["C4","D4","E4","G4","A4","C5","D5"],
-    anger:    ["C3","D#3","F#3","G3","A#3","C4"],
-    sorrow:   ["A3","C4","D4","E4","F4","A4"],
-    surprise: ["E5","G5","A5","B5","D6"],
-    thought:  ["D4","F4","G4","A4","C5","D5"],
-    insight:  ["C5","E5","G5","B5","C6"],
-    calm:     ["G3","A3","C4","D4","E4","G4"]
+  const CHROMATIC = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
+  function pcOf(name){ return CHROMATIC.indexOf(name); }
+  function noteName(pc, octave){
+    pc = ((pc % 12) + 12) % 12;
+    return CHROMATIC[pc] + octave;
+  }
+  const QUALITY_INTERVALS = {
+    maj7: [0,4,7,11], m7: [0,3,7,10], dom7: [0,4,7,10], m7b5: [0,3,6,10],
+    maj9: [0,4,7,11,14], m9: [0,3,7,10,14], dom9: [0,4,7,10,14]
   };
-  // 感情ごとの基本コード（ネオソウル的な気持ちよい和音: maj7/6/add9/m7中心）
-  const CHORDS = {
-    joy:      ["C4","E4","G4","B4","D5"],   // Cmaj9 明るく開放的
-    anger:    ["A3","C4","E4","G4"],        // Am7 落ち着かせつつ芯を持たせる
-    sorrow:   ["A3","C4","E4","G4","B4"],   // Am9 やわらかい憂い
-    surprise: ["D4","F#4","A4","C5","E5"],  // D9 開けた響き
-    thought:  ["D4","F4","A4","C5","E5"],   // Dm9 思索的だが浮遊感
-    insight:  ["C4","E4","G4","A4","D5"],   // C6/9 発見の軽やかさ
-    calm:     ["G3","B3","D4","F#4","A4"]   // Gmaj9 静かで温かい
+  function chordNotes(rootPc, quality, octave){
+    const intervals = QUALITY_INTERVALS[quality] || QUALITY_INTERVALS.maj7;
+    return intervals.map(iv => {
+      const total = rootPc + iv;
+      return noteName(total % 12, octave + Math.floor(total / 12));
+    });
+  }
+  function buildProgression(tonicPc, mode){
+    const degrees = mode === "major"
+      ? [ {semi:2, quality:"m7"}, {semi:7, quality:"dom7"}, {semi:0, quality:"maj9"} ]
+      : [ {semi:2, quality:"m7b5"}, {semi:7, quality:"dom7"}, {semi:0, quality:"m9"} ];
+    return degrees.map(d => ({ rootPc: (tonicPc + d.semi) % 12, quality: d.quality }));
+  }
+  function scaleFromKey(tonicPc, mode, octave){
+    const steps = mode === "major" ? [0,2,4,5,7,9,11] : [0,2,3,5,7,8,10];
+    return steps.map(s => noteName((tonicPc + s) % 12, octave));
+  }
+
+  const EMOTION_KEY = {
+    joy:      { tonic: pcOf("C"),  mode: "major" },
+    anger:    { tonic: pcOf("A"),  mode: "minor" },
+    sorrow:   { tonic: pcOf("D"),  mode: "minor" },
+    surprise: { tonic: pcOf("E"),  mode: "major" },
+    thought:  { tonic: pcOf("G"),  mode: "minor" },
+    insight:  { tonic: pcOf("F"),  mode: "major" },
+    calm:     { tonic: pcOf("A#"), mode: "major" }
   };
-  // コードに足すテンションノート（不協和が強いほど混ぜる半音・増4度系の緊張音）
-  const TENSIONS = {
-    joy:      "F#4",
-    anger:    "F4",
-    sorrow:   "Bb3",
-    surprise: "C5",
-    thought:  "G#4",
-    insight:  "D#5",
-    calm:     "C#4"
-  };
-  // 感情同士の「対立度」。0=近い(協和), 1=対立(不協和)
   const EMOTION_DISTANCE = {
     joy:      { joy:0, insight:0.1, calm:0.3, thought:0.4, surprise:0.5, sorrow:0.8, anger:1.0 },
     anger:    { anger:0, sorrow:0.4, thought:0.5, surprise:0.6, calm:0.8, insight:0.9, joy:1.0 },
@@ -381,19 +388,11 @@
     insight:  { insight:0, thought:0.2, joy:0.1, surprise:0.3, calm:0.4, sorrow:0.7, anger:0.9 },
     calm:     { calm:0, thought:0.4, joy:0.3, sorrow:0.4, surprise:0.6, anger:0.8, insight:0.4 }
   };
-  // 語尾の形ごとにFM変調の強さを変える（波形そのものは切り替えず、ローズらしい芯を保つ）
   const TIMBRE_MOD = {
-    cube:  2.0,
-    spike: 4.5,
-    plank: 1.2,
-    star:  3.2,
-    round: 1.6,
-    prism: 2.6,
-    L:     2.2,
-    blob:  2.4
+    cube: 2.0, spike: 4.5, plank: 1.2, star: 3.2, round: 1.6, prism: 2.6, L: 2.2, blob: 2.4
   };
 
-  const BPM_MIN = 58, BPM_MID = 78, BPM_MAX = 132;
+  const BPM_MIN = 92, BPM_MID = 118, BPM_MAX = 168;
 
   let synth = null;
   let bassSynth = null;
@@ -404,12 +403,15 @@
   let grooveOn = true;
   let lastNoteIndex = {};
   let lastPlayedAt = 0;
-  let currentChordKey = "calm";
+  let currentEmoKey = "calm";
   let reactPulse = 0;
   let hatAccent = 0;
 
-  // 直近の発言履歴（感情とタイムスタンプ）。会話の状態計算に使う。
-  let emotionHistory = []; // [{ key, at }]
+  let currentProgression = buildProgression(EMOTION_KEY.calm.tonic, EMOTION_KEY.calm.mode);
+  let progressionIdx = 0;
+  let barsInChord = 0;
+
+  let emotionHistory = [];
   const HISTORY_WINDOW_MS = 30000;
 
   function recordEmotionHistory(emoKey){
@@ -418,26 +420,19 @@
     emotionHistory = emotionHistory.filter(e => now - e.at < HISTORY_WINDOW_MS).slice(-12);
   }
 
-  // 直近の発言間隔から「盛り上がり度」を0〜1で算出。テンポよく話すほど高い。
   function computeEnergy(){
     if (emotionHistory.length < 2) return 0;
     const recent = emotionHistory.slice(-6);
     let gaps = [];
-    for (let i = 1; i < recent.length; i++){
-      gaps.push(recent[i].at - recent[i-1].at);
-    }
+    for (let i = 1; i < recent.length; i++) gaps.push(recent[i].at - recent[i-1].at);
     const avgGapSec = (gaps.reduce((a,b)=>a+b, 0) / gaps.length) / 1000;
     return Math.max(0, Math.min(1, 1 - (avgGapSec - 1) / 7));
   }
-
-  // 直近の発言間隔からBPMを算出。テンポよく話すほど速く、間が空くほど遅くなる。
   function computeTargetBpm(){
     if (emotionHistory.length < 2) return BPM_MID;
     const t = computeEnergy();
     return Math.round(BPM_MIN + (BPM_MAX - BPM_MIN) * t);
   }
-
-  // 直近の感情の対立度から不協和度を算出。0=協和、1=強い不協和。
   function computeDissonance(){
     if (emotionHistory.length < 2) return 0;
     const recent = emotionHistory.slice(-4);
@@ -445,20 +440,15 @@
     for (let i = 1; i < recent.length; i++){
       const a = recent[i-1].key, b = recent[i].key;
       const dist = (EMOTION_DISTANCE[a] && EMOTION_DISTANCE[a][b] !== undefined) ? EMOTION_DISTANCE[a][b] : 0.5;
-      total += dist;
-      count++;
+      total += dist; count++;
     }
     return count ? total / count : 0;
   }
-
-  // 直近で同じ感情が連続しているほど収束度が高い。0=バラバラ、1=完全に収束。
   function computeConvergence(){
     if (emotionHistory.length < 2) return 0;
     const recent = emotionHistory.slice(-4);
     let same = 0;
-    for (let i = 1; i < recent.length; i++){
-      if (recent[i].key === recent[i-1].key) same++;
-    }
+    for (let i = 1; i < recent.length; i++) if (recent[i].key === recent[i-1].key) same++;
     return same / (recent.length - 1);
   }
 
@@ -466,59 +456,51 @@
     if (synth) return;
     if (typeof Tone === "undefined") return;
 
-    // 発言の1音はFM合成でローズピアノ寄りの温かみのある音色にする
     synth = new Tone.PolySynth(Tone.FMSynth, {
-      harmonicity: 2,
-      modulationIndex: 3,
-      oscillator: { type: "sine" },
-      modulation: { type: "sine" },
+      harmonicity: 2, modulationIndex: 3,
+      oscillator: { type: "sine" }, modulation: { type: "sine" },
       envelope: { attack: 0.006, decay: 0.5, sustain: 0.2, release: 1.0 },
       modulationEnvelope: { attack: 0.01, decay: 0.3, sustain: 0.1, release: 0.5 },
       volume: -10
     }).toDestination();
 
-    // ベースはシンプルなサイン波主体で、レイドバックした柔らかいラインにする
     bassSynth = new Tone.MonoSynth({
       oscillator: { type: "sine" },
-      envelope: { attack: 0.04, decay: 0.3, sustain: 0.4, release: 0.6 },
-      filterEnvelope: { attack: 0.05, decay: 0.2, sustain: 0.5, release: 0.6, baseFrequency: 200, octaves: 2 },
-      volume: -18
+      envelope: { attack: 0.02, decay: 0.25, sustain: 0.4, release: 0.4 },
+      filterEnvelope: { attack: 0.02, decay: 0.2, sustain: 0.5, release: 0.4, baseFrequency: 220, octaves: 2 },
+      volume: -15
     }).toDestination();
 
-    // ブラシの質感を残しつつ耳に刺さらないよう、ピンクノイズ+ローパスフィルターで丸める
     const hatFilter = new Tone.Filter({ type: "lowpass", frequency: 2600, rolloff: -24 }).toDestination();
     hatSynth = new Tone.NoiseSynth({
       noise: { type: "pink" },
       envelope: { attack: 0.002, decay: 0.08, sustain: 0 },
-      volume: -32
+      volume: -30
     }).connect(hatFilter);
 
-    // パッドもローズ寄りのFM音色。トレモロを軽くかけてエレピらしい揺れを出す
-    const padTremolo = new Tone.Tremolo({ frequency: 3.2, depth: 0.25 }).toDestination().start();
+    const padTremolo = new Tone.Tremolo({ frequency: 3.2, depth: 0.2 }).toDestination().start();
     padSynth = new Tone.PolySynth(Tone.FMSynth, {
-      harmonicity: 1.5,
-      modulationIndex: 2,
-      oscillator: { type: "sine" },
-      modulation: { type: "sine" },
-      envelope: { attack: 1.4, decay: 0.6, sustain: 0.6, release: 2.8 },
-      modulationEnvelope: { attack: 0.5, decay: 0.4, sustain: 0.3, release: 1.5 },
-      volume: -20
+      harmonicity: 1.5, modulationIndex: 2,
+      oscillator: { type: "sine" }, modulation: { type: "sine" },
+      envelope: { attack: 0.02, decay: 0.4, sustain: 0.3, release: 1.2 },
+      modulationEnvelope: { attack: 0.02, decay: 0.3, sustain: 0.2, release: 0.8 },
+      volume: -17
     }).connect(padTremolo);
 
-    // 議論が盛り上がっているときだけ加わる、トランペット風の単旋律レイヤー
     leadSynth = new Tone.MonoSynth({
       oscillator: { type: "sawtooth" },
-      envelope: { attack: 0.02, decay: 0.15, sustain: 0.3, release: 0.3 },
-      filterEnvelope: { attack: 0.02, decay: 0.3, sustain: 0.4, release: 0.4, baseFrequency: 800, octaves: 2.5 },
-      volume: -20
+      envelope: { attack: 0.015, decay: 0.15, sustain: 0.3, release: 0.25 },
+      filterEnvelope: { attack: 0.015, decay: 0.25, sustain: 0.4, release: 0.3, baseFrequency: 900, octaves: 2.2 },
+      volume: -19
     }).toDestination();
 
     Tone.Transport.bpm.value = BPM_MID;
+    Tone.Transport.swing = 0.55;
+    Tone.Transport.swingSubdivision = "8n";
     setupGroove();
     startFlowTracker();
   }
 
-  // BPMを毎秒なめらかに目標値へ寄せていく（急変せずスライドするように）
   function startFlowTracker(){
     setInterval(() => {
       if (!grooveOn || typeof Tone === "undefined") return;
@@ -529,80 +511,92 @@
     }, 2000);
   }
 
+  function currentChord(){ return currentProgression[progressionIdx]; }
+  function nextChord(){ return currentProgression[(progressionIdx + 1) % currentProgression.length]; }
+
+  function generateWalkingBassBar(){
+    const cur = currentChord();
+    const nxt = nextChord();
+    const curTones = QUALITY_INTERVALS[cur.quality].map(iv => (cur.rootPc + iv) % 12);
+    const beat1 = cur.rootPc;
+    const beat3 = curTones[2] !== undefined ? curTones[2] : curTones[1];
+    const approachFromBelow = Math.random() < 0.5;
+    const beat4 = approachFromBelow ? (nxt.rootPc - 1 + 12) % 12 : (nxt.rootPc + 1) % 12;
+    const beat2 = curTones[1] !== undefined ? curTones[1] : (beat1 + 2) % 12;
+    return [beat1, beat2, beat3, beat4].map(pc => noteName(pc, 2));
+  }
+
+  function advanceProgression(){
+    barsInChord++;
+    if (barsInChord >= 2){
+      barsInChord = 0;
+      progressionIdx = (progressionIdx + 1) % currentProgression.length;
+    }
+  }
+
   function setupGroove(){
-    // ウォーキングベース: コード構成音を主軸に、拍ごとに経過音・隣接音・跳躍を織り交ぜて
-    // 単調な巡回にならないようにする。4拍で「コード音→経過音→コード音→隣接音」のように動く。
     let beatInBar = 0;
+    let bassBar = generateWalkingBassBar();
+
     new Tone.Loop((time) => {
       if (!grooveOn) return;
-      const chord = CHORDS[currentChordKey] || CHORDS.calm;
-      const rootIdx = 0;
-      let note;
       const b = beatInBar % 4;
-      if (b === 0){
-        note = chord[rootIdx];
-      } else if (b === 2){
-        // コードの5度あたりを狙う
-        note = chord[Math.min(2, chord.length - 1)];
-      } else {
-        // 経過音・隣接音として、直前の音から半音〜全音動く
-        const baseNote = Tone.Frequency(chord[rootIdx]).transpose(b === 1 ? -2 : 1);
-        note = baseNote;
-      }
-      const vel = 0.42 + (b === 0 ? 0.16 : 0);
+      const note = bassBar[b];
+      const vel = 0.45 + (b === 0 ? 0.15 : 0);
       bassSynth.triggerAttackRelease(Tone.Frequency(note).transpose(-12), "4n", time, vel);
-      if (reactPulse > 0 && b === 3){
-        reactPulse--;
-        const passing = chord[1 % chord.length];
-        bassSynth.triggerAttackRelease(Tone.Frequency(passing).transpose(-12), "8n", time + Tone.Time("8n").toSeconds(), 0.35);
+
+      if (b === 3){
+        advanceProgression();
+        bassBar = generateWalkingBassBar();
       }
       beatInBar++;
     }, "4n").start(0);
 
-    // ブラシのハイハット: 機械的な一定間隔ではなく、ジャズブラシらしく不規則に間引く。
-    // 発言直後だけ少しだけ粒立ちよく反応する。
     new Tone.Loop((time) => {
       if (!grooveOn) return;
-      // 8分音符のグリッド上でも、確率的に音を抜いて揺らぎを作る（機械的な連打感を消す）
-      if (Math.random() < 0.35 && hatAccent === 0) return;
-      const vel = hatAccent > 0 ? 0.32 : 0.1 + Math.random() * 0.08;
+      if (Math.random() < 0.3 && hatAccent === 0) return;
+      const vel = hatAccent > 0 ? 0.3 : 0.08 + Math.random() * 0.06;
       if (hatAccent > 0) hatAccent--;
-      const jitter = Common.random(-0.015, 0.015);
-      hatSynth.triggerAttackRelease("16n", time + Math.max(0, jitter), vel);
+      hatSynth.triggerAttackRelease("16n", time, vel);
     }, "8n").start("8n");
 
-    // コードパッド: 議論がうまく噛み合っていない時（強い対立）だけテンションを薄く滲ませ、
-    // それ以外は常に気持ちよい協和音（ネオソウル的な浮遊感）を保つ。
     new Tone.Loop((time) => {
       if (!grooveOn) return;
-      const chord = CHORDS[currentChordKey] || CHORDS.calm;
+      const chord = currentChord();
       const dissonance = computeDissonance();
       const convergence = computeConvergence();
-      let notes = chord.slice();
-      if (dissonance > 0.65 && TENSIONS[currentChordKey]){
-        notes = notes.concat([TENSIONS[currentChordKey]]);
+      let notes = chordNotes(chord.rootPc, chord.quality, 4);
+      if (dissonance > 0.65){
+        const tension = noteName((chord.rootPc + 6) % 12, 4);
+        notes = notes.concat([tension]);
       }
       if (convergence > 0.6){
-        notes = notes.slice(0, 3); // 収束時は音数を減らしすっきり着地させる
+        notes = notes.slice(0, 3);
       }
-      const vel = 0.16 + Math.max(0, dissonance - 0.5) * 0.1;
-      padSynth.triggerAttackRelease(notes, "2m", time, vel);
-    }, "2m").start(0);
+      const vel = 0.15 + Math.max(0, dissonance - 0.5) * 0.1;
+      padSynth.triggerAttackRelease(notes, "2n", time, vel);
+    }, "2n").start(0);
 
-    // トランペット風のリード: 議論が盛り上がっている（発言頻度が高い）ときだけ、
-    // 1小節ごとに一定確率で単旋律のフレーズを差し込む。落ち着くと自然に鳴らなくなる。
     new Tone.Loop((time) => {
       if (!grooveOn) return;
       const energy = computeEnergy();
-      if (energy < 0.35) return; // 盛り上がっていないときは鳴らさない
-      if (Math.random() > energy * 0.8) return;
-      const scale = SCALES[currentChordKey] || SCALES.calm;
-      const phraseLen = 2 + Math.floor(Common.random(0, 2));
+      if (energy < 0.3) return;
+      if (Math.random() > energy * 0.75) return;
+
+      const key = EMOTION_KEY[currentEmoKey] || EMOTION_KEY.calm;
+      const scale = scaleFromKey(key.tonic, key.mode, 5);
+      const motifLen = 2 + Math.floor(Math.random() * 2);
+      const motif = [];
+      for (let i = 0; i < motifLen; i++) motif.push(Math.floor(Math.random() * scale.length));
+      let phrase = motif.slice();
+      if (energy > 0.5) phrase = phrase.concat(motif.map(i => Math.min(scale.length - 1, i + 1)));
+      phrase.push(0);
+
       let t = time;
-      for (let i = 0; i < phraseLen; i++){
-        const note = scale[Math.floor(Common.random(0, scale.length))];
-        leadSynth.triggerAttackRelease(Tone.Frequency(note).transpose(12), "16n", t, 0.22 + energy * 0.15);
-        t += Tone.Time("16n").toSeconds() * (1 + Math.random());
+      for (const degreeIdx of phrase){
+        const note = scale[degreeIdx];
+        leadSynth.triggerAttackRelease(note, "16n", t, 0.2 + energy * 0.15);
+        t += Tone.Time("16n").toSeconds() * (1 + Math.random() * 0.6);
       }
     }, "1m").start(0);
 
@@ -624,10 +618,13 @@
 
   function playNote(emoKey, shape, pace){
     if (!synth) return;
-    currentChordKey = emoKey;
+    currentEmoKey = emoKey;
     recordEmotionHistory(emoKey);
 
-    const scale = SCALES[emoKey] || SCALES.calm;
+    const key = EMOTION_KEY[emoKey] || EMOTION_KEY.calm;
+    currentProgression = buildProgression(key.tonic, key.mode);
+
+    const scale = scaleFromKey(key.tonic, key.mode, 4);
     const prevIdx = lastNoteIndex[emoKey] !== undefined ? lastNoteIndex[emoKey] : Math.floor(scale.length/2);
 
     const now = Date.now();
