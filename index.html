@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ことば積み木</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Shippori+Mincho:wght@400;500;700;800&family=Zen+Kaku+Gothic+New:wght@300;400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --paper: #EDE7DA;
+    --paper-deep: #E3DBC9;
+    --ink: #2B2620;
+    --ink-soft: #5B5346;
+    --line: rgba(43,38,32,0.14);
+    --line-strong: rgba(43,38,32,0.28);
+    --joy: #C97D4A;
+    --anger: #8B3A2E;
+    --sorrow: #4A5D6B;
+    --calm: #B8A180;
+    --surprise: #D4A843;
+    --joy-d: #7A4325;
+    --anger-d: #501F17;
+    --sorrow-d: #263039;
+    --calm-d: #6B5B3F;
+    --surprise-d: #7A5C1B;
+  }
+
+  *{ box-sizing: border-box; }
+
+  html,body{
+    margin:0; padding:0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: 'Zen Kaku Gothic New', sans-serif;
+    overflow-x: hidden;
+    min-height: 100vh;
+  }
+
+  body{
+    background-image:
+      radial-gradient(ellipse at 20% 0%, rgba(255,255,255,0.35), transparent 55%),
+      repeating-linear-gradient(90deg, rgba(43,38,32,0.02) 0px, rgba(43,38,32,0.02) 1px, transparent 1px, transparent 68px);
+  }
+
+  /* ---------- header ---------- */
+  header{
+    position: relative;
+    padding: 4.5rem 6vw 2.5rem;
+    text-align: center;
+    z-index: 5;
+  }
+  .eyebrow{
+    font-size: 12.5px;
+    letter-spacing: 0.32em;
+    color: var(--ink-soft);
+    margin: 0 0 0.9rem;
+    font-weight: 500;
+  }
+  h1{
+    font-family: 'Shippori Mincho', serif;
+    font-weight: 800;
+    font-size: clamp(2.1rem, 5vw, 3.4rem);
+    margin: 0 0 0.7rem;
+    letter-spacing: 0.06em;
+    line-height: 1.35;
+  }
+  h1 .accent{ color: var(--anger-d); }
+  .lede{
+    font-size: 15.5px;
+    color: var(--ink-soft);
+    max-width: 34em;
+    margin: 0 auto;
+    line-height: 1.9;
+  }
+
+  /* ---------- stage ---------- */
+  .stage-wrap{
+    position: relative;
+    width: min(920px, 92vw);
+    margin: 1.5rem auto 0;
+  }
+
+  .stage{
+    position: relative;
+    width: 100%;
+    height: min(74vh, 640px);
+    min-height: 420px;
+    background:
+      linear-gradient(180deg, rgba(255,255,255,0.45) 0%, rgba(255,255,255,0) 14%),
+      var(--paper-deep);
+    border: 1px solid var(--line-strong);
+    border-radius: 4px;
+    overflow: hidden;
+    box-shadow: 0 1px 0 rgba(255,255,255,0.6) inset, 0 30px 60px -30px rgba(43,38,32,0.35);
+  }
+
+  #stageCanvas{
+    display:block;
+    width: 100%;
+    height: 100%;
+  }
+
+  .grain{
+    position: absolute; inset: 0;
+    pointer-events: none;
+    background-image: repeating-linear-gradient(180deg, rgba(43,38,32,0.025) 0px, transparent 2px, transparent 4px);
+    mix-blend-mode: multiply;
+  }
+
+  .floor-label{
+    position: absolute;
+    left: 18px; bottom: 10px;
+    font-size: 11px;
+    letter-spacing: 0.16em;
+    color: var(--ink-soft);
+    opacity: 0.55;
+    pointer-events: none;
+  }
+
+  /* speech ghost text that falls and becomes a block */
+  .speech-ghost{
+    position: absolute;
+    top: 14px;
+    left: 50%;
+    transform: translateX(-50%);
+    max-width: 82%;
+    text-align: center;
+    font-family: 'Shippori Mincho', serif;
+    font-size: 17px;
+    font-weight: 500;
+    color: var(--ink);
+    opacity: 0;
+    pointer-events: none;
+    text-shadow: 0 1px 0 rgba(255,255,255,0.4);
+    z-index: 3;
+  }
+
+  /* ---------- controls ---------- */
+  .console{
+    width: min(920px, 92vw);
+    margin: 1.6rem auto 0;
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    justify-content: center;
+  }
+
+  .mic-btn{
+    position: relative;
+    width: 72px; height: 72px;
+    border-radius: 50%;
+    border: 1.5px solid var(--line-strong);
+    background: radial-gradient(circle at 32% 28%, #F6F1E4, var(--calm) 130%);
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer;
+    transition: transform 0.15s ease, box-shadow 0.2s ease, background 0.3s ease;
+    box-shadow: 0 10px 22px -10px rgba(43,38,32,0.45);
+    flex-shrink: 0;
+  }
+  .mic-btn:hover{ transform: translateY(-2px); }
+  .mic-btn:active{ transform: translateY(0px) scale(0.97); }
+  .mic-btn.listening{
+    background: radial-gradient(circle at 32% 28%, #F6E9DD, var(--joy) 130%);
+    animation: pulse 1.5s ease-in-out infinite;
+  }
+  @keyframes pulse{
+    0%,100%{ box-shadow: 0 10px 22px -10px rgba(43,38,32,0.45), 0 0 0 0 rgba(201,125,74,0.45); }
+    50%{ box-shadow: 0 10px 22px -10px rgba(43,38,32,0.45), 0 0 0 14px rgba(201,125,74,0); }
+  }
+  .mic-btn svg{ width: 26px; height: 26px; fill: var(--ink); }
+
+  .console-text{
+    min-width: 0;
+    flex: 1;
+    max-width: 420px;
+  }
+  .console-status{
+    font-size: 12.5px;
+    letter-spacing: 0.08em;
+    color: var(--ink-soft);
+    margin: 0 0 4px;
+  }
+  .console-transcript{
+    font-family: 'Shippori Mincho', serif;
+    font-size: 15px;
+    color: var(--ink);
+    min-height: 1.4em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .rebuild-btn{
+    flex-shrink: 0;
+    border: 1px solid var(--line-strong);
+    background: transparent;
+    color: var(--ink-soft);
+    font-family: 'Zen Kaku Gothic New', sans-serif;
+    font-size: 12.5px;
+    letter-spacing: 0.06em;
+    padding: 10px 16px;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: background 0.2s ease, color 0.2s ease;
+  }
+  .rebuild-btn:hover{ background: rgba(43,38,32,0.06); color: var(--ink); }
+
+  /* ---------- legend ---------- */
+  .legend{
+    width: min(920px, 92vw);
+    margin: 2.2rem auto 0;
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 10px;
+  }
+  .legend-item{
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    padding: 10px 8px;
+    text-align: center;
+    background: rgba(255,255,255,0.3);
+  }
+  .legend-swatch{
+    width: 22px; height: 22px;
+    margin: 0 auto 8px;
+    border-radius: 3px;
+  }
+  .legend-label{
+    font-size: 11.5px;
+    color: var(--ink-soft);
+    letter-spacing: 0.03em;
+  }
+  .legend-sub{
+    font-family: 'Shippori Mincho', serif;
+    font-size: 13px;
+    color: var(--ink);
+    margin-top: 2px;
+  }
+
+  footer{
+    text-align: center;
+    padding: 3rem 6vw 4rem;
+    color: var(--ink-soft);
+    font-size: 12px;
+    letter-spacing: 0.04em;
+  }
+  footer a{ color: var(--ink-soft); }
+
+  .fallback-input{
+    display: none;
+    width: 100%;
+    margin-top: 10px;
+    padding: 10px 12px;
+    border: 1px solid var(--line-strong);
+    border-radius: 3px;
+    background: rgba(255,255,255,0.5);
+    font-family: 'Zen Kaku Gothic New', sans-serif;
+    font-size: 14px;
+    color: var(--ink);
+  }
+  .fallback-input:focus{ outline: none; border-color: var(--ink-soft); }
+
+  @media (max-width: 720px){
+    .legend{ grid-template-columns: repeat(3, 1fr); }
+    .console{ flex-wrap: wrap; }
+    .console-text{ order: 3; max-width: 100%; }
+  }
+
+  .sr-only{
+    position:absolute; width:1px; height:1px; padding:0; margin:-1px;
+    overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <p class="eyebrow">SPOKEN WORD JOINERY</p>
+  <h1>声はやがて、<br><span class="accent">積み木</span>になる。</h1>
+  <p class="lede">マイクに向かって話すと、声にこもった感情やことばが木片の色と形に変わり、静かに積み上がっていきます。積みすぎれば、いつか崩れます。</p>
+</header>
+
+<main>
+  <div class="stage-wrap">
+    <div class="stage" id="stage">
+      <h2 class="sr-only">声で作る積み木の物理シミュレーション。マイクボタンを押して話すと、感情に応じた形と色の積み木が降ってきて積み上がります。</h2>
+      <canvas id="stageCanvas"></canvas>
+      <div class="speech-ghost" id="speechGhost"></div>
+      <div class="grain"></div>
+      <div class="floor-label">MATERIAL: SPOKEN WOOD</div>
+    </div>
+  </div>
+
+  <div class="console">
+    <button class="mic-btn" id="micBtn" aria-label="マイクで話す">
+      <svg viewBox="0 0 24 24" id="micIcon"><path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg>
+    </button>
+    <div class="console-text">
+      <p class="console-status" id="statusText">マイクを押して話してください</p>
+      <p class="console-transcript" id="transcriptText">&nbsp;</p>
+      <input type="text" class="fallback-input" id="fallbackInput" placeholder="音声が使えない場合はここに入力して Enter">
+    </div>
+    <button class="rebuild-btn" id="clearBtn">積み木を片付ける</button>
+  </div>
+
+  <div class="legend">
+    <div class="legend-item">
+      <div class="legend-swatch" style="background:var(--joy)"></div>
+      <div class="legend-label">よろこび</div>
+      <div class="legend-sub">立方体</div>
+    </div>
+    <div class="legend-item">
+      <div class="legend-swatch" style="background:var(--anger)"></div>
+      <div class="legend-label">いかり</div>
+      <div class="legend-sub">三角柱</div>
+    </div>
+    <div class="legend-item">
+      <div class="legend-swatch" style="background:var(--sorrow)"></div>
+      <div class="legend-label">かなしみ</div>
+      <div class="legend-sub">細長い板</div>
+    </div>
+    <div class="legend-item">
+      <div class="legend-swatch" style="background:var(--surprise)"></div>
+      <div class="legend-label">おどろき</div>
+      <div class="legend-sub">星形</div>
+    </div>
+    <div class="legend-item">
+      <div class="legend-swatch" style="background:var(--calm)"></div>
+      <div class="legend-label">おだやか</div>
+      <div class="legend-sub">円柱</div>
+    </div>
+  </div>
+</main>
+
+<footer>
+  ブラウザの音声認識（Web Speech API）を使用しています。対応: Chrome / Edge 推奨。<br>
+  マイクの音声はサーバーに送信されず、その場で解析されます。
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
