@@ -351,15 +351,15 @@
     insight:  ["C5","E5","G5","B5","C6"],
     calm:     ["G3","A3","C4","D4","E4","G4"]
   };
-  // 感情ごとの基本コード（協和トーン）
+  // 感情ごとの基本コード（ネオソウル的な気持ちよい和音: maj7/6/add9/m7中心）
   const CHORDS = {
-    joy:      ["C4","E4","G4","B4"],   // Cmaj7
-    anger:    ["C3","D#3","F#3","A3"], // Cdim7
-    sorrow:   ["A3","C4","E4","G4"],   // Am7
-    surprise: ["E4","G#4","B4","D5"],  // E7
-    thought:  ["D4","F4","A4","C5"],   // Dm7
-    insight:  ["C4","E4","G4","A4"],   // C6
-    calm:     ["G3","B3","D4","F4"]    // Gmaj7
+    joy:      ["C4","E4","G4","B4","D5"],   // Cmaj9 明るく開放的
+    anger:    ["A3","C4","E4","G4"],        // Am7 落ち着かせつつ芯を持たせる
+    sorrow:   ["A3","C4","E4","G4","B4"],   // Am9 やわらかい憂い
+    surprise: ["D4","F#4","A4","C5","E5"],  // D9 開けた響き
+    thought:  ["D4","F4","A4","C5","E5"],   // Dm9 思索的だが浮遊感
+    insight:  ["C4","E4","G4","A4","D5"],   // C6/9 発見の軽やかさ
+    calm:     ["G3","B3","D4","F#4","A4"]   // Gmaj9 静かで温かい
   };
   // コードに足すテンションノート（不協和が強いほど混ぜる半音・増4度系の緊張音）
   const TENSIONS = {
@@ -381,12 +381,16 @@
     insight:  { insight:0, thought:0.2, joy:0.1, surprise:0.3, calm:0.4, sorrow:0.7, anger:0.9 },
     calm:     { calm:0, thought:0.4, joy:0.3, sorrow:0.4, surprise:0.6, anger:0.8, insight:0.4 }
   };
-  const TIMBRE = {
-    cube:  "triangle",
-    spike: "sawtooth",
-    plank: "sine",
-    star:  "square",
-    round: "sine"
+  // 語尾の形ごとにFM変調の強さを変える（波形そのものは切り替えず、ローズらしい芯を保つ）
+  const TIMBRE_MOD = {
+    cube:  2.0,
+    spike: 4.5,
+    plank: 1.2,
+    star:  3.2,
+    round: 1.6,
+    prism: 2.6,
+    L:     2.2,
+    blob:  2.4
   };
 
   const BPM_MIN = 58, BPM_MID = 78, BPM_MAX = 132;
@@ -456,30 +460,44 @@
     if (synth) return;
     if (typeof Tone === "undefined") return;
 
-    synth = new Tone.PolySynth(Tone.Synth, {
-      envelope: { attack: 0.01, decay: 0.25, sustain: 0.15, release: 0.6 },
-      volume: -8
+    // 発言の1音はFM合成でローズピアノ寄りの温かみのある音色にする
+    synth = new Tone.PolySynth(Tone.FMSynth, {
+      harmonicity: 2,
+      modulationIndex: 3,
+      oscillator: { type: "sine" },
+      modulation: { type: "sine" },
+      envelope: { attack: 0.006, decay: 0.5, sustain: 0.2, release: 1.0 },
+      modulationEnvelope: { attack: 0.01, decay: 0.3, sustain: 0.1, release: 0.5 },
+      volume: -10
     }).toDestination();
 
+    // ベースはシンプルなサイン波主体で、レイドバックした柔らかいラインにする
     bassSynth = new Tone.MonoSynth({
       oscillator: { type: "sine" },
-      envelope: { attack: 0.02, decay: 0.2, sustain: 0.3, release: 0.4 },
-      volume: -16
+      envelope: { attack: 0.04, decay: 0.3, sustain: 0.4, release: 0.6 },
+      filterEnvelope: { attack: 0.05, decay: 0.2, sustain: 0.5, release: 0.6, baseFrequency: 200, octaves: 2 },
+      volume: -18
     }).toDestination();
 
     // ブラシの質感を残しつつ耳に刺さらないよう、ピンクノイズ+ローパスフィルターで丸める
-    const hatFilter = new Tone.Filter({ type: "lowpass", frequency: 3200, rolloff: -24 }).toDestination();
+    const hatFilter = new Tone.Filter({ type: "lowpass", frequency: 2600, rolloff: -24 }).toDestination();
     hatSynth = new Tone.NoiseSynth({
       noise: { type: "pink" },
-      envelope: { attack: 0.002, decay: 0.09, sustain: 0 },
-      volume: -30
+      envelope: { attack: 0.002, decay: 0.08, sustain: 0 },
+      volume: -32
     }).connect(hatFilter);
 
-    padSynth = new Tone.PolySynth(Tone.Synth, {
+    // パッドもローズ寄りのFM音色。トレモロを軽くかけてエレピらしい揺れを出す
+    const padTremolo = new Tone.Tremolo({ frequency: 3.2, depth: 0.25 }).toDestination().start();
+    padSynth = new Tone.PolySynth(Tone.FMSynth, {
+      harmonicity: 1.5,
+      modulationIndex: 2,
       oscillator: { type: "sine" },
-      envelope: { attack: 1.2, decay: 0.5, sustain: 0.6, release: 2.5 },
-      volume: -22
-    }).toDestination();
+      modulation: { type: "sine" },
+      envelope: { attack: 1.4, decay: 0.6, sustain: 0.6, release: 2.8 },
+      modulationEnvelope: { attack: 0.5, decay: 0.4, sustain: 0.3, release: 1.5 },
+      volume: -20
+    }).connect(padTremolo);
 
     Tone.Transport.bpm.value = BPM_MID;
     setupGroove();
@@ -520,21 +538,21 @@
       hatSynth.triggerAttackRelease("16n", time, vel);
     }, "8n").start("8n");
 
-    // コードパッド: 不協和度が高いほどテンションノートを重ね、
-    // 収束度が高いほど和音を薄く協和にまとめる（解決していく感じ）
+    // コードパッド: 議論がうまく噛み合っていない時（強い対立）だけテンションを薄く滲ませ、
+    // それ以外は常に気持ちよい協和音（ネオソウル的な浮遊感）を保つ。
     new Tone.Loop((time) => {
       if (!grooveOn) return;
       const chord = CHORDS[currentChordKey] || CHORDS.calm;
       const dissonance = computeDissonance();
       const convergence = computeConvergence();
       let notes = chord.slice();
-      if (dissonance > 0.45 && TENSIONS[currentChordKey]){
+      if (dissonance > 0.65 && TENSIONS[currentChordKey]){
         notes = notes.concat([TENSIONS[currentChordKey]]);
       }
       if (convergence > 0.6){
         notes = notes.slice(0, 3); // 収束時は音数を減らしすっきり着地させる
       }
-      const vel = 0.14 + dissonance * 0.12;
+      const vel = 0.16 + Math.max(0, dissonance - 0.5) * 0.1;
       padSynth.triggerAttackRelease(notes, "2m", time, vel);
     }, "2m").start(0);
 
@@ -572,7 +590,7 @@
     lastNoteIndex[emoKey] = idx;
     const note = scale[idx];
 
-    synth.set({ oscillator: { type: TIMBRE[shape] || "sine" } });
+    synth.set({ modulationIndex: TIMBRE_MOD[shape] !== undefined ? TIMBRE_MOD[shape] : 2.0 });
     const dur = shape === "spike" || shape === "star" ? "16n" : "8n";
     const velocity = 0.35 + pace * 0.35;
 
