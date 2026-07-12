@@ -32,16 +32,16 @@
     { key:"thought", weight:2, test:/^(そもそも|つまり|要するに|結局|一方で|逆に|仮に|例えば|たとえば)/ },
     { key:"surprise", weight:2, test:/[!！]{1,}$/ },
     { key:"insight", weight:3, test:/^(あ、|あっ、|そうか、?|なるほど、?)/ },
-    // アイデアの兆し: 「面白い/良さそう/イケる/アリ」などの評価語 と
-    // 「んじゃないか/かも/かもしれない」などの仮説語尾が同じ文に共存するとき、
-    // 確定した気づきではなく「思いついた瞬間」としてひらめき判定する。
-    // 「気がする」等はthought側にも語彙・語尾双方で乗るため、重みを強めに設定して優先させる。
+    // アイデアの判定は誤検出を恐れず広めに取る。思いつき・提案っぽい言い回しは
+    // 積極的にひらめきとして拾い、光る頻度を増やす。
     { key:"insight", weight:8, test:/(面白|おもしろ|おもろ|良さそう|よさそう|イケ|いけ|アリ|あり(かも)?|いいかも|良いかも).*(んじゃない|かもしれない|かも|気がする)/ },
     { key:"insight", weight:8, test:/(んじゃないか|かもしれない).*(面白|おもしろ|おもろ|良さそう|よさそう|イケ|いけ)/ },
-    // アイデア提案の文脈: 評価語や「〜も」「〜けど」のような並列・提案の言い回しが
-    // 同じ文にあれば、確定した気づきでなくとも「思いつき」としてひらめき寄りに扱う。
-    { key:"insight", weight:5, test:/(面白|おもしろ|おもろ|良さそう|よさそう|イケ|いけ).*(けど|も|という|といった|みたいな)/ },
-    { key:"insight", weight:4, test:/(アイデア|案)(として|も|は|だ|だけど)?/ }
+    { key:"insight", weight:6, test:/(面白|おもしろ|おもろ|良さそう|よさそう|イケ|いけ)/ },
+    { key:"insight", weight:6, test:/(アイデア|案)(として|も|は|だ|だけど)?/ },
+    // 提案・アクション意向: 「〜てみる」「〜作る」「〜どう」「〜てみたい」等、
+    // 何かを試そう・作ろうとする前向きな言い回しもひらめき寄りに扱う。
+    { key:"insight", weight:5, test:/(てみる|てみたい|作る|作ろう|やってみ|やろう|試し|試して)/ },
+    { key:"insight", weight:4, test:/(どう(かな|だろう)?|でしょう)[?？]?$/ }
   ];
 
   function classifyEmotion(text){
@@ -467,11 +467,13 @@
       volume: -16
     }).toDestination();
 
+    // ブラシの質感を残しつつ耳に刺さらないよう、ピンクノイズ+ローパスフィルターで丸める
+    const hatFilter = new Tone.Filter({ type: "lowpass", frequency: 3200, rolloff: -24 }).toDestination();
     hatSynth = new Tone.NoiseSynth({
-      noise: { type: "white" },
-      envelope: { attack: 0.001, decay: 0.06, sustain: 0 },
-      volume: -28
-    }).toDestination();
+      noise: { type: "pink" },
+      envelope: { attack: 0.002, decay: 0.09, sustain: 0 },
+      volume: -30
+    }).connect(hatFilter);
 
     padSynth = new Tone.PolySynth(Tone.Synth, {
       oscillator: { type: "sine" },
@@ -513,7 +515,7 @@
 
     new Tone.Loop((time) => {
       if (!grooveOn) return;
-      const vel = hatAccent > 0 ? 0.55 : 0.3;
+      const vel = hatAccent > 0 ? 0.4 : 0.18;
       if (hatAccent > 0) hatAccent--;
       hatSynth.triggerAttackRelease("16n", time, vel);
     }, "8n").start("8n");
@@ -651,6 +653,8 @@
     recognition.continuous = true;
     recognition.interimResults = true;
 
+    let userStopped = true; // 初期状態はオフ。ユーザーが明示的に止めたかどうかを追跡
+
     recognition.onstart = function(){
       listening = true;
       micBtn.classList.add("listening");
@@ -659,14 +663,23 @@
     recognition.onend = function(){
       listening = false;
       micBtn.classList.remove("listening");
-      if (statusText.textContent === "聞いています…"){
+      if (userStopped){
         statusText.textContent = "マイクを押して話してください";
+        return;
       }
+      // ブラウザ側の自動タイムアウト等で終了した場合、ユーザーが止めていない限り自動で再開する
+      statusText.textContent = "聞いています…";
+      setTimeout(function(){
+        if (!userStopped){
+          try{ recognition.start(); } catch(err){ /* already running */ }
+        }
+      }, 250);
     };
     recognition.onerror = function(e){
       listening = false;
       micBtn.classList.remove("listening");
       if (e.error === "not-allowed" || e.error === "service-not-allowed"){
+        userStopped = true; // 許可されていない場合は自動再開を試みない
         statusText.textContent = "マイクの使用が許可されていません";
         fallbackInput.style.display = "block";
       } else if (e.error === "no-speech"){
@@ -718,8 +731,10 @@
     micBtn.addEventListener("click", async function(){
       await unlockAudio();
       if (listening){
+        userStopped = true;
         recognition.stop();
       } else {
+        userStopped = false;
         try{ recognition.start(); } catch(err){ /* already started */ }
       }
     });
